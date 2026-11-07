@@ -1,17 +1,22 @@
 //parse.cpp
-/*1.1版本支持命令：
-create table table_name (col1 type1,col2 type2...); type仅支持：int,integer,text,varchar,float 默认col1为主键
-delete from table_name where ...;where可选
-insert into table_name (col1,col2,...) values(val1,val2,...); 要求col1为主键
-insert into table_name values(val1,val2,...); 要求与表属性一一对应
-select * from table_name where...;where可选
-select col1,col2,... from table_name where...;where可选
-update table_name set col = val where...;where可选
-predicate仅支持：主键 = 单个等值
-暂时不支持嵌套谓词*/
-
-/*待更新：alter命令
-**drop命令*/
+/*
+ * 语法解析器实现：Token 序列 → AST。
+ *
+ * 1.1 版本支持的文法：
+ *   create table table_name (col1 type1, col2 type2...);
+ *       type 仅支持 int / integer / text / varchar / float，第 1 列为主键
+ *   delete from table_name [where ...];
+ *   insert into table_name (col1,col2,...) values(val1,val2,...);  要求含主键
+ *   insert into table_name values(val1,val2,...);  要求的列与表定义一一对应
+ *   select * from table_name [where ...];
+ *   select col1,col2,... from table_name [where ...];
+ *   update table_name set col = val [where ...];
+ *   drop table table_name;
+ *   show tables;
+ * 谓词仅支持主键 = 单个等值（不支持嵌套谓词）。
+ *
+ * 待更新：alter 命令
+ */
 #include "parse.hpp"
 #include "tokenize.hpp"
 #include <vector>
@@ -114,6 +119,10 @@ predicate仅支持：主键 = 单个等值
 #endif
 
 
+/*
+ * 入口：先做词法分析，再按首个关键字选择对应的语法规则。
+ * 每个分支的流程都一样：构造对应的 Node → 调用解析函数 → 包成 ASTNode 挂到 Command 上。
+ */
 Result<std::unique_ptr<Command>> parse_command(std::string& input){
     auto tokens_result = tokenize(input);
     if(std::holds_alternative<Error>(tokens_result)){
@@ -191,9 +200,13 @@ Result<std::unique_ptr<Command>> parse_command(std::string& input){
 
 
 
+/*
+ * SELECT * | col1,col2 FROM table [WHERE expr];
+ * 先判定通配符，再解析列列表，最后静态处理 where 与结尾分号。
+ */
 static bool parse_select(std::vector<Token>& tokens,SelectNode& sel,std::string& error){
     int size = tokens.size();
-    int cur = 1;
+    int cur = 1;   /* 跳过首部的 SELECT */
     if(cur < size && tokens[cur].type == Token::Type::IDENT && tokens[cur].str == "*"){
         sel.select_all = true;
     }
@@ -205,6 +218,7 @@ static bool parse_select(std::vector<Token>& tokens,SelectNode& sel,std::string&
         return false;
     }
 
+    /* 通配符也会被 parse_ColumnRef 收进 columns，这里清掉以保持 select_all 语义单一 */
     if(sel.columns.size() == 1 && sel.select_all){
         sel.columns.clear();
     }
@@ -248,6 +262,7 @@ static bool parse_select(std::vector<Token>& tokens,SelectNode& sel,std::string&
     return true;
 }
 
+/* CREATE TABLE name (col type, col type...); —— 第一个列定义即主键 */
 static bool parse_create(std::vector<Token>& tokens,CreateNode& cre,std::string& error){
     int size = tokens.size();
     int cur = 1;
@@ -287,6 +302,7 @@ static bool parse_create(std::vector<Token>& tokens,CreateNode& cre,std::string&
     return true;
 }
 
+/* DELETE FROM name [WHERE expr]; */
 static bool parse_delete(std::vector<Token>& tokens,DeleteNode& del,std::string& error){
     int size = tokens.size();
     int cur = 1;
@@ -321,6 +337,11 @@ static bool parse_delete(std::vector<Token>& tokens,DeleteNode& del,std::string&
     return true;
 }
 
+/*
+ * INSERT INTO name [(col1,col2,...)] VALUES(val1,val2,...);
+ * 带列名与不带列名两条分支，解析出的都是同一组 values，
+ * 区别在于 given_column 标记，决定序列化时按名字对齐还是按位置对齐。
+ */
 static bool parse_insert(std::vector<Token>& tokens,InsertNode& ins,std::string& error){
     int size = tokens.size();
     int cur = 1;
@@ -398,6 +419,10 @@ static bool parse_insert(std::vector<Token>& tokens,InsertNode& ins,std::string&
     return true;
 }
 
+/*
+ * UPDATE name SET col = val [WHERE expr];
+ * set 与 expr 都用 parse_where 解析——它们的语法形状相同，只是语义不同。
+ */
 static bool parse_update(std::vector<Token>& tokens,UpdateNode& upd,std::string& error){
     int size = tokens.size();
     int cur = 1;
@@ -440,6 +465,7 @@ static bool parse_update(std::vector<Token>& tokens,UpdateNode& upd,std::string&
     return true;
 }
 
+/* DROP TABLE name; —— 表名直接取 IDENT 的文本，不走 parse_from */
 static bool parse_drop(std::vector<Token>& tokens,DropNode& drop,std::string& error){
     int size = tokens.size();
     int cur = 1;
@@ -469,6 +495,7 @@ static bool parse_drop(std::vector<Token>& tokens,DropNode& drop,std::string& er
     return true;
 }
 
+/* SHOW TABLES; —— TABLES 在词法阶段是 IDENT（未列为关键字），这里按文本比对 */
 static bool parse_show_tables(std::vector<Token>& tokens,ShowTablesNode& show,std::string& error){
     int size = tokens.size();
     int cur = 1;
@@ -486,6 +513,7 @@ static bool parse_show_tables(std::vector<Token>& tokens,ShowTablesNode& show,st
 
 /*tool func*/
 
+/* 列名列表：col1, col2, ...；遇到 "*" 直接结束循环表示全列 */
 static bool parse_ColumnRef(std::vector<Token>& tokens,std::vector<ColumnRef>& input,int& cur,std::string& error){
     int size = tokens.size();
     if(cur >= size){
@@ -523,6 +551,7 @@ static bool parse_ColumnRef(std::vector<Token>& tokens,std::vector<ColumnRef>& i
     return true;
 }
 
+/* 列定义列表：每项是 "列名 类型" 两个连续 IDENT，最后一项后面不能有逗号 */
 static bool parse_ColumnDef(std::vector<Token>& tokens,std::vector<ColumnDef>& input,int& cur,std::string& error){
     int size = tokens.size();
     if(cur >= size){
@@ -554,6 +583,7 @@ static bool parse_ColumnDef(std::vector<Token>& tokens,std::vector<ColumnDef>& i
     return true;
 }
 
+/* 表名：一个 IDENT */
 static bool parse_from(std::vector<Token>& tokens,TableNode& input,int& cur,std::string& error){
     if(cur >= tokens.size() || !match(tokens[cur],Token::Type::IDENT)){
         error = "expected table_name";
@@ -565,6 +595,7 @@ static bool parse_from(std::vector<Token>& tokens,TableNode& input,int& cur,std:
     return true;
 }
 
+/* 谓词：目前只支持 ColumnRef op ValueNode 的三元形式，op 可以是 = / < / > */
 static bool parse_where(std::vector<Token>& tokens,PredicateNode& input,int& cur,std::string& error){
     /*先仅支持A = B类型：ColumnRef = ValueNode*/
     int size = tokens.size();
@@ -602,6 +633,7 @@ static bool parse_where(std::vector<Token>& tokens,PredicateNode& input,int& cur
     return true;
 }
 
+/* 值列表：val1, val2, ...；NULL 关键字映射为 Sort::null 的 ValueNode */
 static bool parse_value(std::vector<Token>& tokens,std::vector<ValueNode>& input,int& cur,std::string& error){
     int size = tokens.size();
     if(cur >= size){
@@ -642,10 +674,12 @@ static bool parse_value(std::vector<Token>& tokens,std::vector<ValueNode>& input
     return true;
 }
 
+/* 消费当前 token 并把游标后移一位 */
 static Token eat(std::vector<Token>& tokens, int& cur){
     return tokens[cur++];
 }
 
+/* 判断 token 是否是指定类型 */
 static bool match(Token& t, Token::Type type){
     return t.type == type;
 }

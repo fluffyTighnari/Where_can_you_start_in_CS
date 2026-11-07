@@ -1,3 +1,9 @@
+/*
+ * test.cpp —— 序列化 / 反序列化单元测试
+ *
+ * 覆盖四种情形：不带列名、带列名、行反序列化、系统表元信息往返，
+ * 通过 print_hex 打印二进制布局，配合 assert 校验字节结构与往返一致性。
+ */
 #include "../../Parse/parse.hpp"
 #include "../../Parse/sense.hpp"
 #include "../Serialize/serialize.hpp"

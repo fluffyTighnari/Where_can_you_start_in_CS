@@ -1,6 +1,7 @@
 #include "error.hpp"
 #include <string>
 
+/* 把错误层枚举翻译成中文描述，与 message 拼成最终用户可见的错误信息 */
 std::string Error::error_message(){
     std::string where_error{};
     switch(layer){

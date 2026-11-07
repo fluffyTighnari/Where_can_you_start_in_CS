@@ -1,5 +1,12 @@
-// B+ 树综合测试
-// 编译: g++ -std=c++17 -I../.. -DBTREE_USE_MOCK_PAGER Btree.cpp StackPath.cpp mockpager.cpp test_btree.cpp -o test_btree.exe
+/*
+ * test_btree.cpp —— B+ 树综合测试（使用内存页管理器，不触碰磁盘）
+ *
+ * 编译: g++ -std=c++17 -I../.. -DBTREE_USE_MOCK_PAGER Btree.cpp StackPath.cpp mockpager.cpp test_btree.cpp -o test_btree.exe
+ *
+ * 覆盖插入分裂、删除合并/借位、顺序扫描、根节点升降等场景。
+ * 通过遍历所有页调用 validate() 检查节点级不变量，再用全量扫描的结果
+ * 与期望序列比对，从整体上验证树的结构正确性。
+ */
 #include "Btree.hpp"
 #include "mockpager.hpp"
 #include "StackPath.hpp"

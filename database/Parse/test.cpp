@@ -1,4 +1,12 @@
-//test for Tokenize-Parse-Sense
+/*
+ * test.cpp —— 词法 / 语法 / 语义三层的交互式测试
+ *
+ * 三个 DEBUG_* 宏分别控制是否启用对应层的测试，可以单独打开任意一层：
+ *   DEBUG_TOKENIZE  打印 tokenize 的结果
+ *   DEBUG_PARSE     打印 parse_command 产出的 AST
+ *   DEBUG_SENSE     执行语义检查
+ * 通过标准输入逐行喂 SQL，适合手工验证解析行为。
+ */
 #include <string>
 #include <iostream>
 #include <vector>

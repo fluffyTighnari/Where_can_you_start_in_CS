@@ -1,3 +1,15 @@
+/*
+ * test_integration.cpp —— 端到端集成测试
+ *
+ * 在每个用例中走完整流水线：SQL 字符串 → tokenize → parse → sense → execute，
+ * 然后断言结果集内容，用于回归验证各层协同工作的正确性。
+ *
+ * 三组宏构成一个极简的断言框架：
+ *   TEST(name)  打印用例名并开始计时点
+ *   PASS()      记录通过
+ *   FAIL(msg)   记录失败并 assert 中断，便于定位
+ * 统计结果在程序末尾汇总，g_failed 非零时返回非零退出码。
+ */
 #include <iostream>
 #include <string>
 #include <memory>

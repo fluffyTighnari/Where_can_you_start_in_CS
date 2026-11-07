@@ -1,9 +1,19 @@
-//interface.h
+/*
+ * interface.h —— 文件系统对外 API（供 Web 层调用）
+ *
+ * 设计约定：
+ *   - 目录结构只有两层：根目录下直接是用户目录（dirname 即用户名），
+ *     用户目录下是该用户的文件，因此文件名在用户内唯一。
+ *   - 除 fs_create / fs_mount / fs_unmount 外，所有接口内部都会加 fs_mutex，
+ *     可被多个工作线程并发调用。
+ *   - 返回 0 或字节数表示成功，-1 表示失败。
+ */
 #ifndef INTERFACE_H
 #define INTERFACE_H
 #include "help.h"
 #endif
 
+/* 创建一块全新的磁盘镜像并格式化（已存在则直接返回） */
 void fs_create(const char* disk_path);
 
 int fs_mount(const char* disk_path);

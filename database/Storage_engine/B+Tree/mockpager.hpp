@@ -5,10 +5,19 @@
 #include <cstring>
 #include <string>
 
+/*
+ * mockpager.hpp —— 纯内存页管理器（仅用于 B+ 树单元测试）
+ *
+ * 提供与真实 Pager_t 一致的接口，但页数据存放在哈希表中，不落盘。
+ * 定义 BTREE_USE_MOCK_PAGER 时，pager.hpp 会改为包含本文件，
+ * 于是 B+ 树代码无需修改即可在内存中跑测试。
+ */
+
 #define PAGE_SIZE 4096U
 constexpr uint32_t MAX_DB_PAGES = 512;
 constexpr uint32_t MAGIC = 0x66666666;
 
+/* 与真实主页面布局保持一致，便于共用同一套页分配逻辑 */
 struct mainpage {
     uint32_t magic;
     uint32_t page_size;
@@ -21,7 +30,7 @@ struct mainpage {
 
 class Pager_t {
 public:
-    std::unordered_map<uint32_t, std::unique_ptr<char[]>> pages;
+    std::unordered_map<uint32_t, std::unique_ptr<char[]>> pages;   /* 页号 → 页内容 */
     uint32_t next_page = 1;
     bool new_db = true;
     std::unique_ptr<mainpage> main_page;

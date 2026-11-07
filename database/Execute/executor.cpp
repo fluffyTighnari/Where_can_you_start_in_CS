@@ -1,3 +1,15 @@
+/*
+ * executor.cpp —— 执行器：把 AST 命令落到存储引擎上
+ *
+ * 每个 execute_xxx 函数的套路都一致：
+ *   1. 从 SymbolTable 取表的元信息与根页号
+ *   2. 调用 B+ 树接口完成实际的读写
+ *   3. 把本次产生的脏节点 / 新页 / 待删页统一落盘
+ *   4. 根页号若发生变化（分裂或降高），回写符号表
+ *
+ * 分层要点：本层不解析 SQL，也不关心页内字节布局，
+ * 只负责"调度"——选哪个接口、按什么顺序落盘、出错怎么回滚。
+ */
 #include "executor.hpp"
 #include "Parse/parse.hpp"
 #include "Parse/sense.hpp"
@@ -14,6 +26,7 @@
 #include <unordered_map>
 #include <variant>
 
+/* 把谓词右侧的字面量转成 B+ 树键；NULL 用 0 兜底（语义层已排除） */
 static Key make_key_from_value(const ValueNode& val){
     switch(val.type){
         case ValueNode::Sort::Int:
@@ -27,6 +40,14 @@ static Key make_key_from_value(const ValueNode& val){
     }
 }
 
+/*
+ * CREATE TABLE 要做三件事：
+ *   1. 分配一个新页作为该表 B+ 树的根（空叶子节点）
+ *   2. 在符号表里登记表定义与根页号
+ *   3. 把表元信息写入系统 B+ 树，保证重启后能恢复
+ *
+ * 系统表采用懒初始化：第一次 create 时才分配 system_page 的根页。
+ */
 static Result<std::unique_ptr<Info>> execute_create(CreateNode* create, Storage* storage){
     auto info = std::make_unique<Info>();
     info->need_print = false;
@@ -125,6 +146,10 @@ static Result<std::unique_ptr<Info>> execute_create(CreateNode* create, Storage*
     return info;
 }
 
+/*
+ * INSERT：第一列的值即主键（本项目约定），序列化成一行后插入 B+ 树。
+ * 落盘顺序：先把 StackPath 上的修改写回，再写新分裂出的节点，最后更新根页号。
+ */
 static Result<std::unique_ptr<Info>> execute_insert(InsertNode* insert, Storage* storage){
     auto info = std::make_unique<Info>();
     info->need_print = false;
@@ -183,6 +208,14 @@ static Result<std::unique_ptr<Info>> execute_insert(InsertNode* insert, Storage*
     return info;
 }
 
+/*
+ * SELECT 两条路径：
+ *   带 where → Btree_find 走索引精确定位单行
+ *   无 where → Btree_scan 全表顺序扫描
+ *
+ * need_cols 记录实际要输出的列下标；deserialize 会跳过其余列，
+ * 因此投影下推到了反序列化阶段，避免无谓的字符串构造。
+ */
 static Result<std::unique_ptr<Info>> execute_select(SelectNode* select, Storage* storage){
     auto info = std::make_unique<Info>();
     info->need_print = true;
@@ -253,6 +286,14 @@ static Result<std::unique_ptr<Info>> execute_select(SelectNode* select, Storage*
     return info;
 }
 
+/*
+ * DELETE 按条件分成两条路径：
+ *   无 where → Btree_delete_range 递归释放整棵树（保留根页并清空）
+ *   有 where → Btree_delete 定位单行删除，可能触发借位/合并
+ *
+ * 合并产生的待删页必须在结构修改成功后才真正 delete_page，
+ * 否则中途失败会留下悬空引用。
+ */
 static Result<std::unique_ptr<Info>> execute_delete(DeleteNode* del, Storage* storage){
     auto info = std::make_unique<Info>();
     info->need_print = false;
@@ -322,6 +363,13 @@ static Result<std::unique_ptr<Info>> execute_delete(DeleteNode* del, Storage* st
     return info;
 }
 
+/*
+ * DROP TABLE 分三步，顺序不能反：
+ *   1. 清空并释放该表的数据页（Btree_delete_range 保留根页，之后再单独释放根页）
+ *   2. 从系统 B+ 树中删掉表元信息（系统表自身的分裂/合并同样要落盘）
+ *   3. 从内存符号表中移除
+ * 注意第 2 步失败不影响第 3 步——元信息残留比内存与磁盘不一致更容易接受。
+ */
 static Result<std::unique_ptr<Info>> execute_drop(DropNode* drop, Storage* storage){
     auto info = std::make_unique<Info>();
     info->need_print = false;
@@ -387,6 +435,10 @@ static Result<std::unique_ptr<Info>> execute_drop(DropNode* drop, Storage* stora
     return info;
 }
 
+/*
+ * SHOW TABLES：遍历符号表中的根页映射，输出表名与主键信息。
+ * 主键约定为第 0 列，因此直接取 get_column(0)。
+ */
 static Result<std::unique_ptr<Info>> execute_show_tables(ShowTablesNode* show, Storage* storage){
     auto info = std::make_unique<Info>();
     info->need_print = true;
@@ -432,6 +484,11 @@ static Result<std::unique_ptr<Info>> execute_show_tables(ShowTablesNode* show, S
     return info;
 }
 
+/*
+ * UPDATE 的实现方式是"读整行 → 改一列 → 重新序列化 → 写回"：
+ * 因为 B+ 树没有局部更新单列的能力，整行重写的代价换来实现上的简单。
+ * 目前要求必须带 where，否则拒绝（避免全表更新的歧义）。
+ */
 static Result<std::unique_ptr<Info>> execute_update(UpdateNode* update, Storage* storage){
     auto info = std::make_unique<Info>();
     info->need_print = false;
@@ -523,6 +580,7 @@ static Result<std::unique_ptr<Info>> execute_update(UpdateNode* update, Storage*
     return info;
 }
 
+/* 按 AST 节点类型分派到对应的执行函数 */
 Result<std::unique_ptr<Info>> execute_command(Command* command, Storage* storage){
     if(!command || !command->Main_command){
         return Error("invalid command", Error::Layer::Executor);

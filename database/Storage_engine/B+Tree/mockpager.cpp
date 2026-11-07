@@ -1,3 +1,10 @@
+/*
+ * mockpager.cpp —— 纯内存页管理器，仅供 B+ 树单元测试使用
+ *
+ * 与真实 Pager_t 保持相同的接口，但把所有页存在一个哈希表里，不碰磁盘。
+ * 这样 test_btree 可以脱离 sql.db 独立验证 B+ 树的分裂/合并逻辑。
+ * 编译时定义 BTREE_USE_MOCK_PAGER 即启用本实现。
+ */
 #include "mockpager.hpp"
 #include "Btree.hpp"
 #include <iostream>
@@ -19,6 +26,7 @@ int Pager_t::get_fd() const {
     return -1;
 }
 
+/* 读页：内存中不存在即视为非法页号 */
 bool Pager_t::read_page(uint32_t page_num, char* buffer) {
     auto it = pages.find(page_num);
     if (it == pages.end()) return false;
@@ -33,6 +41,7 @@ bool Pager_t::write_page(uint32_t page_num, const char* buffer) {
     return true;
 }
 
+/* update 与 write 的区别：已存在则原地覆盖，不存在则新建 */
 bool Pager_t::update_page(uint32_t page_num, const char* buffer) {
     auto it = pages.find(page_num);
     if (it == pages.end()) {
@@ -84,6 +93,10 @@ bool Pager_t::flush_page() {
     return true;
 }
 
+/*
+ * 调试用：把内存中所有页按节点结构打印出来。
+ * 定义 DEBUG 时调用 Btree_Node::print 输出完整内容，否则只输出摘要。
+ */
 void Pager_t::dump_all() {
 #ifdef DEBUG
     for (auto& [num, buf] : pages) {
